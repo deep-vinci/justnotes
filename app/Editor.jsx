@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { highlightContent } from "../lib/highlight";
-import { SunIcon, MoonIcon, PencilIcon } from "./icons";
+import { SunIcon, MoonIcon, PencilIcon, CloudIcon } from "./icons";
 
-const STORE_KEY = "mono-editor-data";
-const SYNC_INTERVAL = 10000;
+const SAVE_DEBOUNCE = 1500;
+const RETRY_DELAY = 3000;
 
 function makeId() {
   return Math.floor(1000 + Math.random() * 9000).toString();
@@ -20,12 +20,6 @@ function deriveTitle(content) {
 function emptyTab() {
   return { id: makeId(), title: "Untitled", customTitle: false, content: "" };
 }
-
-const INITIAL_DATA = {
-  theme: "light",
-  activeTabId: "1",
-  tabs: [{ id: "1", title: "Untitled", customTitle: false, content: "" }],
-};
 
 function CodeEditor({ value, onChange, onKeyDown }) {
   const preRef = useRef(null);
@@ -55,64 +49,23 @@ function CodeEditor({ value, onChange, onKeyDown }) {
   );
 }
 
-export default function Editor() {
+export default function Editor({ initialTabs, initialTheme }) {
   const router = useRouter();
-  const [data, setData] = useState(INITIAL_DATA);
-  const [hydrated, setHydrated] = useState(false);
+  const [data, setData] = useState(() => ({
+    theme: initialTheme,
+    activeTabId: (initialTabs[0] || emptyTab()).id,
+    tabs: initialTabs.length > 0 ? initialTabs : [emptyTab()],
+  }));
   const [editingTabId, setEditingTabId] = useState(null);
   const [editingValue, setEditingValue] = useState("");
+  const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "pending"
 
   const dataRef = useRef(data);
   dataRef.current = data;
-  const dirtyRef = useRef(false);
+  const pendingRef = useRef(false);
+  const saveTimerRef = useRef(null);
   const tabsContainerRef = useRef(null);
   const prevTabCount = useRef(data.tabs.length);
-
-  // Load from localStorage after mount only, so the server-rendered and
-  // first client render match (avoids hydration mismatch / theme flash).
-  // Only falls back to the DB when local storage has nothing -- normal
-  // loads never touch it.
-  useEffect(() => {
-    let cancelled = false;
-
-    async function init() {
-      let loaded = null;
-      try {
-        loaded = JSON.parse(localStorage.getItem(STORE_KEY));
-      } catch {}
-
-      if (loaded && Array.isArray(loaded.tabs) && loaded.tabs.length > 0) {
-        setData(loaded);
-      } else {
-        try {
-          const res = await fetch("/api/tabs");
-          const { tabs } = res.ok ? await res.json() : { tabs: [] };
-          if (!cancelled && Array.isArray(tabs) && tabs.length > 0) {
-            setData({ theme: loaded?.theme || "light", activeTabId: tabs[0].id, tabs });
-          }
-        } catch {}
-      }
-
-      if (!cancelled) setHydrated(true);
-    }
-
-    init();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(data));
-    } catch {}
-  }, [data, hydrated]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    document.documentElement.classList.toggle("dark", data.theme === "dark");
-  }, [data.theme, hydrated]);
 
   useEffect(() => {
     if (data.tabs.length > prevTabCount.current && tabsContainerRef.current) {
@@ -121,42 +74,50 @@ export default function Editor() {
     prevTabCount.current = data.tabs.length;
   }, [data.tabs.length]);
 
-  // Background write-behind sync to the DB: fires ~10s after a change,
-  // independent of which note-tab is active or in view.
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      if (!dirtyRef.current) return;
-      dirtyRef.current = false;
-      try {
-        const res = await fetch("/api/sync", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tabs: dataRef.current.tabs }),
-        });
-        if (!res.ok) dirtyRef.current = true;
-      } catch {
-        dirtyRef.current = true;
+  async function flushSave() {
+    saveTimerRef.current = null;
+    try {
+      const res = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tabs: dataRef.current.tabs }),
+      });
+      if (res.ok) {
+        pendingRef.current = false;
+        setSaveStatus("saved");
+      } else {
+        saveTimerRef.current = setTimeout(flushSave, RETRY_DELAY);
       }
-    }, SYNC_INTERVAL);
-    return () => clearInterval(interval);
-  }, []);
+    } catch {
+      saveTimerRef.current = setTimeout(flushSave, RETRY_DELAY);
+    }
+  }
 
+  function markDirty() {
+    pendingRef.current = true;
+    setSaveStatus("pending");
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(flushSave, SAVE_DEBOUNCE);
+  }
+
+  // Best-effort save when the tab is hidden/closed before the debounce fires.
   useEffect(() => {
-    function flush() {
-      if (!dirtyRef.current) return;
+    function flushBeacon() {
+      if (!pendingRef.current) return;
       const blob = new Blob([JSON.stringify({ tabs: dataRef.current.tabs })], {
         type: "application/json",
       });
-      if (navigator.sendBeacon("/api/sync", blob)) dirtyRef.current = false;
+      navigator.sendBeacon("/api/sync", blob);
     }
     function onVisibilityChange() {
-      if (document.visibilityState === "hidden") flush();
+      if (document.visibilityState === "hidden") flushBeacon();
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("pagehide", flush);
+    window.addEventListener("pagehide", flushBeacon);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("pagehide", flushBeacon);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
   }, []);
 
@@ -169,7 +130,7 @@ export default function Editor() {
           : t
       ),
     }));
-    dirtyRef.current = true;
+    markDirty();
   }
 
   function switchTab(id) {
@@ -179,7 +140,7 @@ export default function Editor() {
   function addTab() {
     const tab = emptyTab();
     setData((prev) => ({ ...prev, tabs: [...prev.tabs, tab], activeTabId: tab.id }));
-    dirtyRef.current = true;
+    markDirty();
   }
 
   function closeTab(id) {
@@ -201,7 +162,7 @@ export default function Editor() {
 
       return { ...prev, tabs, activeTabId };
     });
-    dirtyRef.current = true;
+    markDirty();
   }
 
   function renameTab(id, title) {
@@ -213,11 +174,16 @@ export default function Editor() {
         return trimmed ? { ...t, title: trimmed, customTitle: true } : { ...t, title: deriveTitle(t.content), customTitle: false };
       }),
     }));
-    dirtyRef.current = true;
+    markDirty();
   }
 
   function toggleTheme() {
-    setData((prev) => ({ ...prev, theme: prev.theme === "dark" ? "light" : "dark" }));
+    setData((prev) => {
+      const theme = prev.theme === "dark" ? "light" : "dark";
+      document.cookie = `theme=${theme}; path=/; max-age=31536000; samesite=lax`;
+      document.documentElement.classList.toggle("dark", theme === "dark");
+      return { ...prev, theme };
+    });
   }
 
   function startEditing(tab) {
@@ -333,6 +299,12 @@ export default function Editor() {
             +
           </button>
         </div>
+        <span
+          className={"icon-btn status-btn" + (saveStatus === "saved" ? " status-saved" : "")}
+          title={saveStatus === "saved" ? "Saved" : "Saving…"}
+        >
+          <CloudIcon />
+        </span>
         <button className="icon-btn" title="Log out" onClick={logout}>
           Log out
         </button>

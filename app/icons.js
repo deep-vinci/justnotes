@@ -23,3 +23,11 @@ export function PencilIcon() {
     </svg>
   );
 }
+
+export function CloudIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M7 18h11a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 8.14 8.02 4 4 0 0 0 7 18z" />
+    </svg>
+  );
+}

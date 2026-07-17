@@ -12,6 +12,7 @@
   --tok-comment: #008000;
   --tok-number: #098658;
   --fence-bg: rgb(0 0 0 / 4%);
+  --saved: #2ea043;
 }
 
 :root.dark {
@@ -28,6 +29,7 @@
   --tok-comment: #6a9955;
   --tok-number: #b5cea8;
   --fence-bg: rgb(255 255 255 / 6%);
+  --saved: #3fb950;
 }
 
 * {
@@ -57,20 +59,13 @@ body {
   justify-content: space-between;
   background-color: var(--header);
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-}
-
-.header::-webkit-scrollbar {
-  display: none;
-}
-.header {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
 }
 
 .tabs-container {
   display: flex;
   align-items: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   scroll-behavior: smooth;
 }
@@ -198,6 +193,17 @@ body {
 }
 :root.dark .icon-btn:hover {
   background-color: rgb(255 255 255 / 5%);
+}
+
+.status-btn {
+  cursor: default;
+}
+.status-btn:hover {
+  background-color: transparent;
+}
+.status-btn.status-saved {
+  color: var(--saved);
+  opacity: 1;
 }
 
 .editor-container {

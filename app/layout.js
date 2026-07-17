@@ -1,4 +1,4 @@
-import Script from "next/script";
+import { cookies } from "next/headers";
 import "./globals.css";
 
 export const metadata = {
@@ -6,20 +6,12 @@ export const metadata = {
   description: "A minimal notes editor",
 };
 
-const THEME_INIT_SCRIPT = `try {
-  var d = JSON.parse(localStorage.getItem("mono-editor-data") || "null");
-  if (d && d.theme === "dark") document.documentElement.classList.add("dark");
-} catch (e) {}`;
+export default async function RootLayout({ children }) {
+  const theme = (await cookies()).get("theme")?.value === "dark" ? "dark" : "light";
 
-export default function RootLayout({ children }) {
   return (
-    <html lang="en">
-      <body>
-        <Script id="theme-init" strategy="beforeInteractive">
-          {THEME_INIT_SCRIPT}
-        </Script>
-        {children}
-      </body>
+    <html lang="en" className={theme === "dark" ? "dark" : undefined}>
+      <body>{children}</body>
     </html>
   );
 }
