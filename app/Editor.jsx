@@ -70,14 +70,36 @@ export default function Editor() {
 
   // Load from localStorage after mount only, so the server-rendered and
   // first client render match (avoids hydration mismatch / theme flash).
+  // Only falls back to the DB when local storage has nothing -- normal
+  // loads never touch it.
   useEffect(() => {
-    try {
-      const loaded = JSON.parse(localStorage.getItem(STORE_KEY));
+    let cancelled = false;
+
+    async function init() {
+      let loaded = null;
+      try {
+        loaded = JSON.parse(localStorage.getItem(STORE_KEY));
+      } catch {}
+
       if (loaded && Array.isArray(loaded.tabs) && loaded.tabs.length > 0) {
         setData(loaded);
+      } else {
+        try {
+          const res = await fetch("/api/tabs");
+          const { tabs } = res.ok ? await res.json() : { tabs: [] };
+          if (!cancelled && Array.isArray(tabs) && tabs.length > 0) {
+            setData({ theme: loaded?.theme || "light", activeTabId: tabs[0].id, tabs });
+          }
+        } catch {}
       }
-    } catch {}
-    setHydrated(true);
+
+      if (!cancelled) setHydrated(true);
+    }
+
+    init();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
